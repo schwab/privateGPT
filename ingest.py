@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
 import os
+from os.path import isfile, join
 import glob
+import shutil
 from typing import List
 from dotenv import load_dotenv
 from multiprocessing import Pool
 from tqdm import tqdm
+from os import listdir
 
 from langchain.document_loaders import (
     CSVLoader,
@@ -31,8 +34,8 @@ load_dotenv()
 
 
 # Load environment variables
-persist_directory = os.environ.get('PERSIST_DIRECTORY')
-source_directory = os.environ.get('SOURCE_DIRECTORY', 'source_documents')
+PERSIST_DIRECTORY = os.environ.get('PERSIST_DIRECTORY')
+SOURCE_DIRECTORY = os.environ.get('SOURCE_DIRECTORY', 'source_documents')
 embeddings_model_name = os.environ.get('EMBEDDINGS_MODEL_NAME')
 chunk_size = 500
 chunk_overlap = 50
@@ -60,6 +63,12 @@ class MyElmLoader(UnstructuredEmailLoader):
 
         return doc
 
+# get the folders in the data directory
+def get_data_folders(dir):  
+    if not os.path.exists(dir):
+        os.makedirs(dir)  
+    filtered_folders = [f for f in listdir(dir) if not isfile(join(dir, f))]
+    return filtered_folders
 
 # Map file extensions to document loaders and their arguments
 LOADER_MAPPING = {
@@ -79,10 +88,16 @@ LOADER_MAPPING = {
     ".txt": (TextLoader, {"encoding": "utf8"}),
     # Add more mappings for other file extensions and loaders as needed
 }
-
+def extract_zip_files(file_path):
+    # extract the zip file
+    shutil.unpack_archive(file_path, 'source_documents')
+    
+    # remove the zip file
+    os.remove(file_path)
 
 def load_single_document(file_path: str) -> Document:
     ext = "." + file_path.rsplit(".", 1)[-1]
+    
     if ext in LOADER_MAPPING:
         loader_class, loader_args = LOADER_MAPPING[ext]
         loader = loader_class(file_path, **loader_args)
@@ -90,6 +105,9 @@ def load_single_document(file_path: str) -> Document:
 
     raise ValueError(f"Unsupported file extension '{ext}'")
 
+def get_source_files(dir):
+    filtered_files = [file for file in listdir(SOURCE_DIRECTORY) if isfile(join(SOURCE_DIRECTORY, file))]
+    return filtered_files
 
 def load_documents(source_dir: str, ignored_files: List[str] = []) -> List[Document]:
     """
@@ -108,19 +126,18 @@ def load_documents(source_dir: str, ignored_files: List[str] = []) -> List[Docum
             for i, doc in enumerate(pool.imap_unordered(load_single_document, filtered_files)):
                 results.append(doc)
                 pbar.update()
-
     return results
 
 def process_documents(ignored_files: List[str] = []) -> List[Document]:
     """
     Load documents and split in chunks
     """
-    print(f"Loading documents from {source_directory}")
-    documents = load_documents(source_directory, ignored_files)
+    print(f"Loading documents from {SOURCE_DIRECTORY}")
+    documents = load_documents(SOURCE_DIRECTORY, ignored_files)
     if not documents:
         print("No new documents to load")
         exit(0)
-    print(f"Loaded {len(documents)} new documents from {source_directory}")
+    print(f"Loaded {len(documents)} new documents from {SOURCE_DIRECTORY}")
     text_splitter = RecursiveCharacterTextSplitter(chunk_size=chunk_size, chunk_overlap=chunk_overlap)
     texts = text_splitter.split_documents(documents)
     print(f"Split into {len(texts)} chunks of text (max. {chunk_size} tokens each)")
@@ -139,14 +156,25 @@ def does_vectorstore_exist(persist_directory: str) -> bool:
                 return True
     return False
 
-def main():
+def delete_vectorstore(persist_directory: str) -> None:
+    """
+    Deletes vectorstore
+    """
+    print(f"Deleting vectorstore at {persist_directory}")
+    shutil.rmtree(persist_directory)
+
+def get_embeddings():
     # Create embeddings
     embeddings = HuggingFaceEmbeddings(model_name=embeddings_model_name)
+    return embeddings
 
-    if does_vectorstore_exist(persist_directory):
+def index(embeddings, db=None):
+    #embeddings = HuggingFaceEmbeddings(model_name=embeddings_model_name)
+    if does_vectorstore_exist(PERSIST_DIRECTORY):
         # Update and store locally vectorstore
-        print(f"Appending to existing vectorstore at {persist_directory}")
-        db = Chroma(persist_directory=persist_directory, embedding_function=embeddings, client_settings=CHROMA_SETTINGS)
+        print(f"Appending to existing vectorstore at {PERSIST_DIRECTORY}")
+        if db is None:
+            db = Chroma(persist_directory=PERSIST_DIRECTORY, embedding_function=embeddings, client_settings=CHROMA_SETTINGS)
         collection = db.get()
         texts = process_documents([metadata['source'] for metadata in collection['metadatas']])
         print(f"Creating embeddings. May take some minutes...")
@@ -156,12 +184,12 @@ def main():
         print("Creating new vectorstore")
         texts = process_documents()
         print(f"Creating embeddings. May take some minutes...")
-        db = Chroma.from_documents(texts, embeddings, persist_directory=persist_directory, client_settings=CHROMA_SETTINGS)
+        db = Chroma.from_documents(texts, embeddings, persist_directory=PERSIST_DIRECTORY, client_settings=CHROMA_SETTINGS)
     db.persist()
     db = None
-
+    embeddings = None
     print(f"Ingestion complete! You can now run privateGPT.py to query your documents")
 
 
 if __name__ == "__main__":
-    main()
+    index()

@@ -20,6 +20,58 @@ target_source_chunks = int(os.environ.get('TARGET_SOURCE_CHUNKS',4))
 
 from constants import CHROMA_SETTINGS
 
+class QueryProcessor():
+    def __init__(self, callbacks=None, embeddings=None):
+        """Ask a question and return the answer."""
+        self.embeddings = embeddings
+        self.db = Chroma(persist_directory=persist_directory, embedding_function=self.embeddings, client_settings=CHROMA_SETTINGS)
+        self.retriever = self.db.as_retriever(search_kwargs={"k": target_source_chunks})
+        self.callbacks = [StreamingStdOutCallbackHandler()]
+        match model_type:
+            case "LlamaCpp":
+                self.llm = LlamaCpp(model_path=model_path, n_ctx=model_n_ctx, callbacks=callbacks, n_gpu_layers=20000, verbose=False)
+            case "GPT4All":
+                self.llm = GPT4All(model=model_path, n_ctx=model_n_ctx, backend='gptj', callbacks=callbacks, verbose=False)
+            case _default:
+                print(f"Model {model_type} not supported!")
+                return
+        self.qa = RetrievalQA.from_chain_type(llm=self.llm, chain_type="stuff", retriever=self.retriever, return_source_documents=True)        
+        self.res = None
+
+    def reset_db(self):
+        self.db = Chroma(persist_directory=persist_directory, embedding_function=self.embeddings, client_settings=CHROMA_SETTINGS)
+        self.retriever = self.db.as_retriever(search_kwargs={"k": target_source_chunks})
+        self.callbacks = [StreamingStdOutCallbackHandler()]
+        self.qa = RetrievalQA.from_chain_type(llm=self.llm, chain_type="stuff", retriever=self.retriever, return_source_documents=True)        
+    
+    def get_documents(self):
+        if not self.res is None:
+            return self.res['source_documents']
+        
+    def get_answser(self):
+        if not self.res is None:
+            return self.res['result']
+    
+    def ask(self, query):
+        """Ask a question and return the answer."""
+        
+        # Get the answer from the chain
+        self.res = self.qa(query)
+        return self.res['result']
+        #answer, docs = res['result'],  res['source_documents']
+
+        # Print the result
+        #print("\n\n> Question:")
+        #print(query)
+        #print("\n> Answer:")
+        #print(answer)
+
+        # Print the relevant sources used for the answer
+        #for document in docs:
+        #    print("\n> " + document.metadata["source"] + ":")
+        #    print(document.page_content)
+    #return input(prompt).strip()
+
 def main():
     # Parse the command line arguments
     args = parse_arguments()

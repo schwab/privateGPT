@@ -1,0 +1,43 @@
+version: "3"
+services:
+  schwab-private-gpt:
+    build:
+      context: .
+      target: llama-cublas  # Specify the variant to build
+#      args:
+#        - LCL_SRC_DIR=text-generation-webui  # Developers - see Dockerfile app_base
+    container_name: schwab-private-gpt
+    environment:
+      #- EXTRA_LAUNCH_ARGS="--listen --verbose" # Custom launch args (e.g., --model MODEL_NAME)
+      - N_GPU_LAYERS=20000
+      - CUDA_VISIBLE_DEVICES=0
+      - GPU_MEMORY=2000MiB
+      - CACHE_CAPACITY=1000MiB  
+      #- CLI_ARGS="--model models/7B/4bit/ggml-model-q4_0.bin --wbits 4 --listen --auto-devices --n-gpu-layers 20000"
+    env_file: .env
+    ports:
+      - 7860:7860  # Default web port
+      - 5000:5000  # Default API port
+#      - 5005:5005  # Default streaming port
+      - 5001:5001  # Default OpenAI API extension port
+    volumes:
+      - ./config/loras:/app/loras
+      #- /media/vast/raid_6TB/alpaca/llama/LLaMA/7B/4bit:/app/models
+      - ./config/presets:/app/presets
+      - ./config/prompts:/app/prompts
+      - ./config/softprompts:/app/softprompts
+      - ./config/training:/app/training
+      - ./:/app
+      - /media/vast/raid_6TB/models/:/app/models
+    logging:
+      driver:  json-file
+      options:
+        max-file: "3"   # number of files or file count
+        max-size: '10m'
+    deploy:
+        resources:
+          reservations:
+            devices:
+              - driver: nvidia
+                device_ids: ['0']
+                capabilities: [gpu]
